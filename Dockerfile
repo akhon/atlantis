@@ -5,7 +5,7 @@ ARG DEBIAN_TAG=12.1-slim
 
 # Stage 1: build artifact and download deps
 
-FROM golang:1.21.0-alpine AS builder
+FROM --platform=linux/amd64 golang:1.21.0-alpine AS builder
 
 ARG ATLANTIS_VERSION=dev
 ENV ATLANTIS_VERSION=${ATLANTIS_VERSION}
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X 'main.version=${ATLANTIS_VERSION}' -X 'main.commit=${ATLANTIS_COMMIT}' -X 'main.date=${ATLANTIS_DATE}'" -v -o atlantis .
 
-FROM debian:${DEBIAN_TAG} as debian-base
+FROM --platform=linux/amd64 debian:${DEBIAN_TAG} as debian-base
 
 # Install packages needed for running Atlantis.
 # We place this last as it will bust less docker layer caches when packages update
@@ -48,11 +48,12 @@ RUN apt-get update && \
         libcap2 \
         dumb-init \
         gnupg \
+        wget \
         openssl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-FROM debian-base as deps
+FROM --platform=linux/amd64 debian-base as deps
 
 # Get the architecture the image is being built for
 ARG TARGETPLATFORM
@@ -144,10 +145,16 @@ RUN AVAILABLE_TERRAFORM_VERSIONS="1.2.9 1.3.9 1.4.6 ${DEFAULT_TERRAFORM_VERSION}
     done && \
     ln -s "/usr/local/bin/tf/versions/${DEFAULT_TERRAFORM_VERSION}/terraform" /usr/local/bin/terraform
 
+# install terragrunt-atlantis-config
+ENV TERRAGRUNT_ATLANTIS_CONFIG_VERSION=1.16.0
+RUN wget https://github.com/transcend-io/terragrunt-atlantis-config/releases/download/v${TERRAGRUNT_ATLANTIS_CONFIG_VERSION}/terragrunt-atlantis-config_${TERRAGRUNT_ATLANTIS_CONFIG_VERSION}_linux_amd64.tar.gz && \
+  tar xf terragrunt-atlantis-config_${TERRAGRUNT_ATLANTIS_CONFIG_VERSION}_linux_amd64.tar.gz && \
+  mv terragrunt-atlantis-config_${TERRAGRUNT_ATLANTIS_CONFIG_VERSION}_linux_amd64/terragrunt-atlantis-config_${TERRAGRUNT_ATLANTIS_CONFIG_VERSION}_linux_amd64 terragrunt-atlantis-config && \
+  install terragrunt-atlantis-config /usr/local/bin
 
 # Stage 2 - Alpine
 # Creating the individual distro builds using targets
-FROM alpine:${ALPINE_TAG} AS alpine
+FROM --platform=linux/amd64 alpine:${ALPINE_TAG} AS alpine
 
 # atlantis user for gosu and OpenShift compatibility
 RUN addgroup atlantis && \
@@ -161,6 +168,8 @@ RUN addgroup atlantis && \
 COPY --from=builder /app/atlantis /usr/local/bin/atlantis
 # copy terraform
 COPY --from=deps /usr/local/bin/terraform* /usr/local/bin/
+# copy terragrunt-atlantis-config
+COPY --from=deps /usr/local/bin/terragrunt-atlantis-config /usr/local/bin/terragrunt-atlantis-config
 # copy deps
 COPY --from=deps /usr/local/bin/conftest /usr/local/bin/conftest
 COPY --from=deps /bin/gosu /bin/gosu
